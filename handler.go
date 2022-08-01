@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/subtle"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -17,7 +19,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var awsAuthorizationCredentialRegexp = regexp.MustCompile("Credential=([a-zA-Z0-9]+)/[0-9]+/([a-z]+-?[a-z]+-?[0-9]+)/s3/aws4_request")
+var awsAuthorizationCredentialRegexp = regexp.MustCompile("Credential=([a-zA-Z0-9]+)/[0-9]+/([^/]+-?[0-9]+?)/s3/aws4_request")
 var awsAuthorizationSignedHeadersRegexp = regexp.MustCompile("SignedHeaders=([a-zA-Z0-9;-]+)")
 
 // Handler is a special handler that re-signs any AWS S3 request and sends it upstream
@@ -59,6 +61,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	defer proxyReq.Body.Close()
 
 	url := url.URL{Scheme: proxyReq.URL.Scheme, Host: proxyReq.Host}
 	proxy := httputil.NewSingleHostReverseProxy(&url)
@@ -71,13 +74,20 @@ func (h *Handler) sign(signer *v4.Signer, req *http.Request, region string) erro
 }
 
 func (h *Handler) signWithTime(signer *v4.Signer, req *http.Request, region string, signTime time.Time) error {
-	body := bytes.NewReader([]byte{})
+	var body io.ReadSeeker = bytes.NewReader([]byte{})
 	if req.Body != nil {
-		b, err := ioutil.ReadAll(req.Body)
+		f, err := ioutil.TempFile(os.TempDir(), "s3-proxy-*")
+		if err != nil {
+			return fmt.Errorf("unable to create temporary file: %w", err)
+		}
+		_, err = io.Copy(f, req.Body)
 		if err != nil {
 			return err
 		}
-		body = bytes.NewReader(b)
+
+		fb := newFilebuffer(f)
+		body = fb
+		defer f.Seek(0, io.SeekStart) //reset file for proxying
 	}
 
 	_, err := signer.Sign(req, body, "s3", region, signTime)
@@ -177,6 +187,10 @@ func (h *Handler) assembleUpstreamReq(signer *v4.Signer, req *http.Request, regi
 	}
 
 	proxyURL := *req.URL
+	if proxyURL.Query().Get("list-type") == "2" {
+		proxyURL.Query().Add("prefix", proxyURL.Path)
+		proxyURL.Path = "/"
+	}
 	proxyURL.Scheme = h.UpstreamScheme
 	proxyURL.Host = upstreamEndpoint
 	proxyURL.RawPath = req.URL.Path
