@@ -75,7 +75,12 @@ func (h *Handler) sign(signer *v4.Signer, req *http.Request, region string) erro
 
 func (h *Handler) signWithTime(signer *v4.Signer, req *http.Request, region string, signTime time.Time) error {
 	var body io.ReadSeeker = bytes.NewReader([]byte{})
-	if req.Body != nil {
+
+	_, digested := req.Header["X-Amz-Content-Sha256"]
+	if digested && req.Body != nil {
+		body = fakeseeker{req.Body}
+
+	} else if !digested && req.Body != nil {
 		f, err := ioutil.TempFile(os.TempDir(), "s3-proxy-*")
 		if err != nil {
 			return fmt.Errorf("unable to create temporary file: %w", err)
@@ -204,6 +209,9 @@ func (h *Handler) assembleUpstreamReq(signer *v4.Signer, req *http.Request, regi
 	}
 	if val, ok := req.Header["Content-Md5"]; ok {
 		proxyReq.Header["Content-Md5"] = val
+	}
+	if val, ok := req.Header["X-Amz-Content-Sha256"]; ok {
+		proxyReq.Header["X-Amz-Content-Sha256"] = val
 	}
 
 	// Sign the upstream request
