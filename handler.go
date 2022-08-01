@@ -192,7 +192,7 @@ func (h *Handler) assembleUpstreamReq(signer *v4.Signer, req *http.Request, regi
 	}
 
 	proxyURL := *req.URL
-	// for ListObjectV2 to "/"
+	// force ListObjectV2 to use "/"
 	if req.Method == http.MethodGet && proxyURL.Query().Get("list-type") == "2" {
 		proxyURL.Query().Add("prefix", proxyURL.Path+proxyURL.Query().Get("prefix"))
 		proxyURL.Path = "/"
