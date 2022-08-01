@@ -90,8 +90,7 @@ func (h *Handler) signWithTime(signer *v4.Signer, req *http.Request, region stri
 			return err
 		}
 
-		fb := newFilebuffer(f)
-		body = fb
+		body = newFilebuffer(f)
 		defer f.Seek(0, io.SeekStart) //reset file for proxying
 	}
 
