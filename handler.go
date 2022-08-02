@@ -33,6 +33,12 @@ type Handler struct {
 	// Upstream S3 endpoint URL
 	UpstreamEndpoint string
 
+	// Upstrem S3 addressing scheme, "virtual" or "path"
+	UpstreamAddressing string
+
+	// Source S3 addressing scheme, "virtual" or "path"
+	SourceAddressing string
+
 	// Allowed endpoint, i.e., Host header to accept incoming requests from
 	AllowedSourceEndpoint string
 
@@ -191,14 +197,40 @@ func (h *Handler) assembleUpstreamReq(signer *v4.Signer, req *http.Request, regi
 	}
 
 	proxyURL := *req.URL
-	// force ListObjectV2 to use "/"
-	if req.Method == http.MethodGet && proxyURL.Query().Get("list-type") == "2" {
-		proxyURL.Query().Add("prefix", proxyURL.Path+proxyURL.Query().Get("prefix"))
-		proxyURL.Path = "/"
+	switch {
+	case h.UpstreamAddressing == "virtual" && h.SourceAddressing == "path":
+		bucket := ""
+		ss := strings.Split(req.URL.EscapedPath(), "/")
+		if len(ss) > 1 && ss[1] != "" {
+			bucket = ss[1]
+			if len(ss) > 2 {
+				ss = append(ss[:1], ss[2:]...)
+			} else {
+				ss = ss[:1]
+			}
+		}
+		if bucket != "" {
+			upstreamEndpoint = bucket + "." + upstreamEndpoint
+		}
+		proxyURL.Path = strings.Join(ss, "/")
+
+	case h.UpstreamAddressing == "path" && h.SourceAddressing == "virtual":
+		bucket := ""
+		ss := strings.Split(req.Host, ".")
+		if len(ss) > 1 {
+			bucket = ss[0]
+			ss = ss[1:]
+		}
+		upstreamEndpoint = strings.Join(ss, ".")
+		if len(proxyURL.Path) > 1 {
+			proxyURL.Path = "/" + bucket + proxyURL.Path
+		} else {
+			proxyURL.Path = "/" + bucket
+		}
 	}
-	proxyURL.Scheme = h.UpstreamScheme
-	proxyURL.Host = upstreamEndpoint
 	proxyURL.RawPath = req.URL.Path
+	proxyURL.Host = upstreamEndpoint
+	proxyURL.Scheme = h.UpstreamScheme
 	proxyReq, err := http.NewRequest(req.Method, proxyURL.String(), req.Body)
 	if err != nil {
 		return nil, err
